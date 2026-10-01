@@ -227,9 +227,6 @@ return function(mod)
     end
   end
 
-  local SAVE_PICKER_SCREEN = "Gen3MultiSaveSlotsSavePicker"
-  local LOAD_PICKER_SCREEN = "Gen3MultiSaveSlotsLoadPicker"
-
   local function pickerItems(version, allowNew)
     local items = {}
     for _, slot in ipairs(existingSlots(version)) do
@@ -395,7 +392,7 @@ return function(mod)
             if not game then game = Runtime._game end
             local session = game and game.session
             playMenuSe("SE_SELECT")
-            openGame3LoadPicker(game, session)
+            openPicker(game, session, "load")
             return nil
           end
 
