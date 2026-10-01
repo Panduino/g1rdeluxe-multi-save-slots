@@ -252,46 +252,87 @@ return function(mod)
     SaveMenu.show({ session = session, game = game })
   end
 
-  mod.content.screens:register(SAVE_PICKER_SCREEN, {
-    new = function(game)
-      local session = game and game.session
-      local version = versionOf(game, session)
-      local items = pickerItems(version, true)
-      if #items == 0 then items = {{ label = "NEW SAVE", value = "__new__" }} end
-      return mod.ui.ListMenu.new(game, "SAVE GAME", items, {
-        onChoose = function(item, menu)
-          local id = item and item.value
-          if id == "__new__" then
-            id = SaveData.createSlot(version)
-          end
-          if not id then return end
-          SaveData.setActiveSlot(version, id)
-          menu:close()
-          openNativeSave(game, session)
-        end,
-      })
-    end,
-  })
+  local function playMenuSe(name)
+    pcall(function()
+      local Audio = require("src.core.game3.audio")
+      local SE = require("src.core.game3.se_ids")
+      local id = SE.resolve(name)
+      if id then Audio.playSe(id) end
+    end)
+  end
 
-  mod.content.screens:register(LOAD_PICKER_SCREEN, {
-    new = function(game)
-      local session = game and game.session
-      local version = versionOf(game, session)
-      local items = pickerItems(version, false)
-      if #items == 0 then
-        items = {{ label = "NO SAVES", value = "__none__" }}
-      end
-      return mod.ui.ListMenu.new(game, "SELECT SAVE", items, {
-        onChoose = function(item, menu)
-          local id = item and item.value
-          if id and id ~= "__none__" then
-            SaveData.setActiveSlot(version, id)
-            menu:close()
-          end
-        end,
-      })
-    end,
-  })
+  -- The Gen 3 UI has its own modal stack. Use that stack for the slot picker
+  -- so it sits in front of the native FireRed start menu and can hand control
+  -- straight back to the native Save screen.
+  local function openGame3SavePicker(game, session)
+    local Stack = require("src.ui.game3.stack")
+    local Window = require("src.ui.game3.window")
+    local ListMenu = require("src.ui.game3.list_menu")
+    local version = versionOf(game, session)
+    local items = pickerItems(version, true)
+    if #items == 0 then
+      items = {{ label = "NEW SAVE", value = "__new__" }}
+    end
+
+    local id = "Gen3MultiSaveSlotsSavePicker"
+    local menu
+    menu = ListMenu.new({
+      template = Window.template(4, 3, 22, math.min(14, #items + 2)),
+      items = items,
+      maxShowed = math.min(8, #items),
+      itemX = 8,
+      cursorX = 0,
+      onSelect = function(item)
+        local slotId = item and item.value
+        if slotId == "__new__" then
+          slotId = SaveData.createSlot(version)
+        end
+        if not slotId then return end
+
+        SaveData.setActiveSlot(version, slotId)
+        Stack.pop(id)
+        openNativeSave(game, session)
+      end,
+      onCancel = function()
+        Stack.pop(id)
+      end,
+    })
+
+    Stack.push(id, menu, { hideBelow = true })
+  end
+
+  local function openGame3LoadPicker(game, session)
+    local Stack = require("src.ui.game3.stack")
+    local Window = require("src.ui.game3.window")
+    local ListMenu = require("src.ui.game3.list_menu")
+    local version = versionOf(game, session)
+    local items = pickerItems(version, false)
+    if #items == 0 then
+      items = {{ label = "NO SAVES", value = "__none__", disabled = true }}
+    end
+
+    local id = "Gen3MultiSaveSlotsLoadPicker"
+    local menu
+    menu = ListMenu.new({
+      template = Window.template(4, 3, 22, math.min(14, #items + 2)),
+      items = items,
+      maxShowed = math.min(8, #items),
+      itemX = 8,
+      cursorX = 0,
+      onSelect = function(item)
+        local slotId = item and item.value
+        if slotId and slotId ~= "__none__" then
+          SaveData.setActiveSlot(version, slotId)
+          Stack.pop(id)
+        end
+      end,
+      onCancel = function()
+        Stack.pop(id)
+      end,
+    })
+
+    Stack.push(id, menu, { hideBelow = true })
+  end
 
   -- Native FireRed SAVE: choose the slot first, then let the real save screen
   -- perform the write. The chosen slot remains active, so the most recently
@@ -305,7 +346,7 @@ return function(mod)
     for _, item in ipairs(out) do
       if item.id == "save" then
         item.onSelect = function(g, s)
-          mod.ui.push(g, SAVE_PICKER_SCREEN)
+          openGame3SavePicker(g, s)
         end
         break
       end
@@ -334,6 +375,7 @@ return function(mod)
         if pressed("up") and state.menuIndex > 1 then
           state.menuIndex = state.menuIndex - 1
           state.menuScroll = state.menuIndex >= 4 and 4 or 0
+          playMenuSe("SE_SELECT")
           return nil
         end
         if pressed("down") then
@@ -342,6 +384,7 @@ return function(mod)
             state.menuIndex = state.menuIndex + 1
           end
           state.menuScroll = state.menuIndex >= 4 and 4 or 0
+          playMenuSe("SE_SELECT")
           return nil
         end
 
@@ -351,7 +394,8 @@ return function(mod)
             local Runtime = require("src.core.game3.runtime")
             if not game then game = Runtime._game end
             local session = game and game.session
-            openPicker(game, session, "load")
+            playMenuSe("SE_SELECT")
+            openGame3LoadPicker(game, session)
             return nil
           end
 
@@ -414,13 +458,7 @@ return function(mod)
       local selected = state.menuIndex
       if selected > 1 then
         local yy = ys[selected - 1] - scroll
-        -- FireRed highlights a menu row by darkening everything outside it.
-        love.graphics.setColor(0, 0, 0, 7 / 16)
-        love.graphics.rectangle("fill", 0, 0, 240, math.max(0, yy))
-        love.graphics.rectangle("fill", 0, yy + 18, 240, 240 - (yy + 18))
-        love.graphics.rectangle("fill", 0, yy, 18, 18)
-        love.graphics.rectangle("fill", 222, yy, 18, 18)
-        love.graphics.setColor(1, 1, 1, 1)
+        Window.cursorPx(20, yy + 1)
       end
 
       if picker.open then drawPicker() end
