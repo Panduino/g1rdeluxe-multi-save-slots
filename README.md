@@ -1,16 +1,28 @@
-# Multiple Save Slots
-<img width="1386" height="859" alt="saveslot" src="https://github.com/user-attachments/assets/82c08ffd-8ae4-4fc5-b589-20fe2bdd6216" />
+# Multiple Save Slots - Gen 3
 
-Title **CONTINUE** and in-game **SAVE** open a slot list.
+Adds multiple independent save slots to Gen 3 games.
 
-- Only slots that already have a save are listed (no empty placeholders)
-- **NEW SAVE** creates a slot, makes it active, and writes immediately
-- **MANAGE** deletes a slot from disk and the registry
+## Features
+
+- **CONTINUE** opens a list of existing save slots.
+- **SAVE** opens a slot picker before saving.
+- **NEW SAVE** creates the next numbered slot and immediately uses it for the save.
+- **MANAGE** lets you delete save slots.
+- The currently active slot is marked with `*`.
+- Existing Gen 3 save-slot data is handled by the game's built-in `SaveData` system.
+
+## Save layout
+
+Slots are stored separately under the Gen 3 game's save data:
+
+`saves/<game version>/slot1.lua`  
+`saves/<game version>/slot2.lua`  
+`saves/<game version>/slot3.lua`
+
+The mod does not replace the underlying save system; it selects which built-in slot is active.
 
 ## Install
 
-Enable in the mod manager. No dependencies.
+Enable the mod in the mod manager.
 
-## License
-
-MIT
+This version is Gen 3-only.
