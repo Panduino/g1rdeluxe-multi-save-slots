@@ -298,6 +298,8 @@ return function(mod)
     Stack.push(id, menu, { hideBelow = true })
   end
 
+  local pendingContinue = false
+
   local function openGame3LoadPicker(game, session)
     local Stack = require("src.ui.game3.stack")
     local Window = require("src.ui.game3.window")
@@ -321,9 +323,7 @@ return function(mod)
         if slotId and slotId ~= "__none__" then
           SaveData.setActiveSlot(version, slotId)
           Stack.pop(id)
-          if game and type(game._handleBootAction) == "function" then
-            game:_handleBootAction({ action = "continue" })
-          end
+          pendingContinue = true
         end
       end,
       onCancel = function()
@@ -361,6 +361,11 @@ return function(mod)
     local originalUpdate = Boot.update
 
     Boot.update = function(state, input, dt)
+      if pendingContinue and state.phase == Boot.PHASE.MENU then
+        pendingContinue = false
+        return { action = "continue" }
+      end
+
       if state.phase == Boot.PHASE.MENU and state.hasContinue and input
           and input.wasPressed and input:wasPressed("select") then
         local game = state.game
