@@ -227,6 +227,72 @@ return function(mod)
     end
   end
 
+  local SAVE_PICKER_SCREEN = "Gen3MultiSaveSlotsSavePicker"
+  local LOAD_PICKER_SCREEN = "Gen3MultiSaveSlotsLoadPicker"
+
+  local function pickerItems(version, allowNew)
+    local items = {}
+    for _, slot in ipairs(existingSlots(version)) do
+      items[#items + 1] = {
+        label = string.format("%s%s  %s", slot.id,
+          slot.id == SaveData.activeSlot(version) and " *" or "  ",
+          slot.label or slot.name or "SAVE"),
+        value = slot.id,
+      }
+    end
+    if allowNew then
+      items[#items + 1] = { label = "NEW SAVE", value = "__new__" }
+    end
+    return items
+  end
+
+  local function openNativeSave(game, session)
+    local Screens = require("src.ui.game3.screens")
+    local SaveMenu = Screens.get("save", session)
+    SaveMenu.show({ session = session, game = game })
+  end
+
+  mod.content.screens:register(SAVE_PICKER_SCREEN, {
+    new = function(game)
+      local session = game and game.session
+      local version = versionOf(game, session)
+      local items = pickerItems(version, true)
+      if #items == 0 then items = {{ label = "NEW SAVE", value = "__new__" }} end
+      return mod.ui.ListMenu.new(game, "SAVE GAME", items, {
+        onChoose = function(item, menu)
+          local id = item and item.value
+          if id == "__new__" then
+            id = SaveData.createSlot(version)
+          end
+          if not id then return end
+          SaveData.setActiveSlot(version, id)
+          menu:close()
+          openNativeSave(game, session)
+        end,
+      })
+    end,
+  })
+
+  mod.content.screens:register(LOAD_PICKER_SCREEN, {
+    new = function(game)
+      local session = game and game.session
+      local version = versionOf(game, session)
+      local items = pickerItems(version, false)
+      if #items == 0 then
+        items = {{ label = "NO SAVES", value = "__none__" }}
+      end
+      return mod.ui.ListMenu.new(game, "SELECT SAVE", items, {
+        onChoose = function(item, menu)
+          local id = item and item.value
+          if id and id ~= "__none__" then
+            SaveData.setActiveSlot(version, id)
+            menu:close()
+          end
+        end,
+      })
+    end,
+  })
+
   -- Native FireRed SAVE: choose the slot first, then let the real save screen
   -- perform the write. The chosen slot remains active, so the most recently
   -- saved slot is always the active slot.
@@ -239,7 +305,7 @@ return function(mod)
     for _, item in ipairs(out) do
       if item.id == "save" then
         item.onSelect = function(g, s)
-          openPicker(g, s, "save")
+          mod.ui.push(g, SAVE_PICKER_SCREEN)
         end
         break
       end
@@ -346,12 +412,14 @@ return function(mod)
       end
 
       local selected = state.menuIndex
-      if selected == 1 then
-        -- Native draw already handles the CONTINUE cursor.
-      else
+      if selected > 1 then
         local yy = ys[selected - 1] - scroll
+        -- FireRed highlights a menu row by darkening everything outside it.
         love.graphics.setColor(0, 0, 0, 7 / 16)
-        love.graphics.rectangle("fill", 18, yy, 204, 18)
+        love.graphics.rectangle("fill", 0, 0, 240, math.max(0, yy))
+        love.graphics.rectangle("fill", 0, yy + 18, 240, 240 - (yy + 18))
+        love.graphics.rectangle("fill", 0, yy, 18, 18)
+        love.graphics.rectangle("fill", 222, yy, 18, 18)
         love.graphics.setColor(1, 1, 1, 1)
       end
 
