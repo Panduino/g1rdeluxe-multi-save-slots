@@ -247,49 +247,13 @@ return function(mod)
     return out
   end)
 
-  -- FireRed's title menu owns its menuItems function internally. Patch that
-  -- local function so the native menu itself gains one extra row. Do not
-  -- redraw or replace the title screen.
+  -- Add SELECT SAVE to the native FireRed menu without replacing the
+  -- title screen. The engine keeps menuItems local, so the extra row is
+  -- handled only by this small input/draw shim.
   local Boot = require("src.ui.game3.boot")
   if not Boot._multiSaveSlotsWrapped then
-    local function addSelectSave(next)
-      return function(state)
-        local items = next(state)
-        if not state.hasContinue then return items end
-        local out = {}
-        for _, item in ipairs(items) do
-          if item == "NEW GAME" then
-            out[#out + 1] = "SELECT SAVE"
-          end
-          out[#out + 1] = item
-        end
-        return out
-      end
-    end
-
-    local function patchMenuItems(fn)
-      if type(debug) ~= "table" or type(debug.getupvalue) ~= "function"
-          or type(debug.setupvalue) ~= "function" then
-        return false
-      end
-      local patched = false
-      for i = 1, 32 do
-        local name, value = debug.getupvalue(fn, i)
-        if not name then break end
-        if name == "menuItems" and type(value) == "function" then
-          debug.setupvalue(fn, i, addSelectSave(value))
-          patched = true
-        end
-      end
-      return patched
-    end
-
     local originalUpdate = Boot.update
-    local originalMenuItems = Boot.menuItems
-    Boot.menuItems = addSelectSave(originalMenuItems)
-
-    patchMenuItems(originalUpdate)
-    patchMenuItems(Boot.draw)
+    local originalDraw = Boot.draw
 
     Boot.update = function(state, input, dt)
       if picker.open then
@@ -297,11 +261,24 @@ return function(mod)
         return nil
       end
 
-      if state.phase == Boot.PHASE.MENU and input and input.wasPressed then
-        local function pressed(k) return input:wasPressed(k) end
+      if state.phase == Boot.PHASE.MENU and state.hasContinue and input
+          and input.wasPressed then
+        local pressed = function(k) return input:wasPressed(k) end
+
+        if pressed("up") and state.menuIndex > 1 then
+          state.menuIndex = state.menuIndex - 1
+          return nil
+        end
+        if pressed("down") then
+          local maxIndex = 5
+          if state.menuIndex < maxIndex then
+            state.menuIndex = state.menuIndex + 1
+          end
+          return nil
+        end
+
         if pressed("a") or pressed("start") then
-          local items = Boot.menuItems(state)
-          if items[state.menuIndex] == "SELECT SAVE" then
+          if state.menuIndex == 2 then
             local game = state.game
             local Runtime = require("src.core.game3.runtime")
             if not game then game = Runtime._game end
@@ -309,10 +286,74 @@ return function(mod)
             openPicker(game, session, "load")
             return nil
           end
+
+          -- Translate our inserted row out before giving native FireRed
+          -- choices back to the original Boot implementation.
+          local nativeIndex = state.menuIndex > 2 and state.menuIndex - 1
+            or state.menuIndex
+          state.menuIndex = nativeIndex
+          local result = originalUpdate(state, input, dt)
+          state.menuIndex = nativeIndex > 1 and nativeIndex + 1 or nativeIndex
+          return result
         end
       end
 
       return originalUpdate(state, input, dt)
+    end
+
+    Boot.draw = function(state)
+      originalDraw(state)
+
+      if state.phase ~= Boot.PHASE.MENU or not state.hasContinue
+          or state.saveError then
+        if picker.open then drawPicker() end
+        return
+      end
+
+      local Window = require("src.ui.game3.window")
+      local RomText = require("src.core.game3.rom_text")
+      local info = state.continueInfo or {}
+      local frameType = info.frameType or 0
+      local scroll = state.menuIndex >= 4 and 32 or 0
+
+      -- Leave the native CONTINUE box completely untouched. Only replace the
+      -- small option rows underneath it so SELECT SAVE takes one row.
+      love.graphics.setColor(139 / 255, 148 / 255, 255 / 255, 1)
+      love.graphics.rectangle("fill", 20, 96 - scroll, 204, 136)
+      love.graphics.setColor(1, 1, 1, 1)
+
+      local labels = {
+        "SELECT SAVE",
+        RomText.plain("gText_NewGame"),
+        RomText.plain("gText_MysteryGift"),
+        RomText.plain("gText_MenuExit"),
+      }
+      local ys = { 104, 136, 168, 200 }
+
+      for i = 1, 4 do
+        local yy = ys[i] - scroll
+        Window.userFrame(Window.template(3, math.floor(yy / 8), 24, 2), frameType)
+        local text = labels[i]
+        Window.printPx(text, 26, yy + 2, {
+          colors = {
+            fg = {98 / 255, 98 / 255, 98 / 255, 1},
+            shadow = {213 / 255, 213 / 255, 205 / 255, 1},
+            bg = {1, 1, 1, 1},
+          },
+        })
+      end
+
+      local selected = state.menuIndex
+      if selected == 1 then
+        -- Native draw already handles the CONTINUE cursor.
+      else
+        local yy = ys[selected - 1] - scroll
+        love.graphics.setColor(0, 0, 0, 7 / 16)
+        love.graphics.rectangle("fill", 18, yy, 204, 18)
+        love.graphics.setColor(1, 1, 1, 1)
+      end
+
+      if picker.open then drawPicker() end
     end
 
     Boot._multiSaveSlotsWrapped = true
