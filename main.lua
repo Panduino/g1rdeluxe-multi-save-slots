@@ -274,17 +274,37 @@ return function(mod)
         return nil
       end
 
-      if state.phase == Boot.PHASE.MENU and input and input.wasPressed
-          and input:wasPressed("a") then
+      if state.phase == Boot.PHASE.MENU and input and input.wasPressed then
+        local function pressed(k) return input:wasPressed(k) end
         local items = Boot.menuItems(state)
-        local choice = items[state.menuIndex]
-        if choice == "SELECT SAVE" then
-          local game = state.game
-          local Runtime = require("src.core.game3.runtime")
-          if not game then game = Runtime._game end
-          local session = game and game.session
-          openPicker(game, session, "load")
+
+        if pressed("up") or pressed("down") then
+          local delta = pressed("up") and -1 or 1
+          state.menuIndex = math.max(1, math.min(#items, state.menuIndex + delta))
           return nil
+        end
+
+        if pressed("a") or pressed("start") then
+          local choice = items[state.menuIndex]
+          if choice == "SELECT SAVE" then
+            local game = state.game
+            local Runtime = require("src.core.game3.runtime")
+            if not game then game = Runtime._game end
+            local session = game and game.session
+            openPicker(game, session, "load")
+            return nil
+          end
+
+          -- Boot.update's native handler still knows how to perform all of
+          -- the real FireRed actions. Translate our extra row out before
+          -- handing control back to it.
+          if state.menuIndex > 2 then
+            local nativeIndex = state.menuIndex - 1
+            state.menuIndex = nativeIndex
+            local result = originalUpdate(state, input, dt)
+            state.menuIndex = nativeIndex + 1
+            return result
+          end
         end
       end
 
