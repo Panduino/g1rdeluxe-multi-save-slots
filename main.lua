@@ -452,11 +452,9 @@ return function(mod)
         })
       end
 
-      local selected = state.menuIndex
-      if selected > 1 then
-        -- FireRed dims everything outside the selected option's full row.
-        -- The gaps between rows stay dim because they are outside this box.
-        local row = selected - 2
+      if state.menuIndex > 1 then
+        -- FireRed dims everything outside the selected option's row.
+        local row = state.menuIndex - 2
         local y0 = 98 + row * 32 - scroll
         local y1 = 126 + row * 32 - scroll
         love.graphics.setColor(0, 0, 0, 7 / 16)
