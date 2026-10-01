@@ -166,19 +166,19 @@ return function(mod)
   local function handlePickerInput(input)
     if not picker.open or not input then return true end
 
-    if input.wasPressed("up") then
+    if input:wasPressed("up") then
       picker.index = ((picker.index - 2) % #picker.rows) + 1
       return true
     end
-    if input.wasPressed("down") then
+    if input:wasPressed("down") then
       picker.index = (picker.index % #picker.rows) + 1
       return true
     end
-    if input.wasPressed("a") then
+    if input:wasPressed("a") then
       selectPickerRow()
       return true
     end
-    if input.wasPressed("b") then
+    if input:wasPressed("b") then
       closePicker()
       return true
     end
@@ -267,6 +267,7 @@ return function(mod)
 
         if pressed("up") and state.menuIndex > 1 then
           state.menuIndex = state.menuIndex - 1
+          state.menuScroll = state.menuIndex >= 4 and 4 or 0
           return nil
         end
         if pressed("down") then
@@ -274,6 +275,7 @@ return function(mod)
           if state.menuIndex < maxIndex then
             state.menuIndex = state.menuIndex + 1
           end
+          state.menuScroll = state.menuIndex >= 4 and 4 or 0
           return nil
         end
 
@@ -314,7 +316,7 @@ return function(mod)
       local RomText = require("src.core.game3.rom_text")
       local info = state.continueInfo or {}
       local frameType = info.frameType or 0
-      local scroll = state.menuIndex >= 4 and 32 or 0
+      local scroll = (state.menuScroll or 0) * 8
 
       -- Leave the native CONTINUE box completely untouched. Only replace the
       -- small option rows underneath it so SELECT SAVE takes one row.
