@@ -354,24 +354,22 @@ return function(mod)
     return out
   end)
 
-  -- Let FireRed's native CONTINUE entry open the slot picker first.
-  -- The rest of the title menu stays completely native.
+  -- SELECT opens the save-slot picker from the native FireRed title menu.
+  -- The visible title menu remains completely native.
   local Boot = require("src.ui.game3.boot")
   if not Boot._multiSaveSlotsWrapped then
     local originalUpdate = Boot.update
 
     Boot.update = function(state, input, dt)
       if state.phase == Boot.PHASE.MENU and state.hasContinue and input
-          and input.wasPressed and input:wasPressed("a") then
-        if state.menuIndex == 1 then
-          local game = state.game
-          local Runtime = require("src.core.game3.runtime")
-          if not game then game = Runtime._game end
-          local session = game and game.session
-          playMenuSe("SE_SELECT")
-          openGame3LoadPicker(game, session)
-          return nil
-        end
+          and input.wasPressed and input:wasPressed("select") then
+        local game = state.game
+        local Runtime = require("src.core.game3.runtime")
+        if not game then game = Runtime._game end
+        local session = game and game.session
+        playMenuSe("SE_SELECT")
+        openGame3LoadPicker(game, session)
+        return nil
       end
 
       return originalUpdate(state, input, dt)
