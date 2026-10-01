@@ -454,8 +454,17 @@ return function(mod)
 
       local selected = state.menuIndex
       if selected > 1 then
-        local yy = ys[selected - 1] - scroll
-        Window.cursorPx(20, yy + 1)
+        -- FireRed dims everything outside the selected option's full row.
+        -- The gaps between rows stay dim because they are outside this box.
+        local row = selected - 2
+        local y0 = 98 + row * 32 - scroll
+        local y1 = 126 + row * 32 - scroll
+        love.graphics.setColor(0, 0, 0, 7 / 16)
+        love.graphics.rectangle("fill", 0, 0, 240, math.max(0, y0))
+        love.graphics.rectangle("fill", 0, y1, 240, 240 - y1)
+        love.graphics.rectangle("fill", 0, y0, 18, y1 - y0)
+        love.graphics.rectangle("fill", 222, y0, 18, y1 - y0)
+        love.graphics.setColor(1, 1, 1, 1)
       end
 
       if picker.open then drawPicker() end
