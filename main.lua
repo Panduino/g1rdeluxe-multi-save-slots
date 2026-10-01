@@ -1,470 +1,222 @@
 -- Multiple Save Slots for Gen 3.
--- CONTINUE loads a selected slot and SAVE writes to a selected slot.
--- NEW SAVE creates a slot immediately before the normal save runs.
--- MANAGE lets the player delete non-active slots.
+-- Uses FireRed's native Start menu and native Save screen.
+-- This mod only chooses which SaveData slot the native save/load code uses.
 
 return function(mod)
   local SaveData = require("src.core.SaveData")
   local GameVersion = require("src.core.GameVersion")
-  local Strings = require("src.core.Strings")
-  local TextBox = require("src.render.TextBox")
-  local ChoiceBox = require("src.ui.ChoiceBox")
-  local ListMenu = require("src.ui.ListMenu")
-  local TitleState = require("src.ui.TitleState")
-  local Game = require("src.core.Game")
+  local Runtime = require("src.mods.Runtime")
 
-  local function currentVersion(game)
-    return (game and game.version) or GameVersion.get()
+  local function versionFor(game, session)
+    return (session and session.version)
+      or (game and game.version)
+      or GameVersion.get()
   end
 
   local function isGen3(version)
     return GameVersion.generation(version) == 3
   end
 
-  local function syncOptions()
-    local disk = SaveData.loadOptions()
-    if disk and disk.saveSlots
-        and Game and Game.save and Game.save.options then
-      Game.save.options.saveSlots = disk.saveSlots
-    end
-  end
-
-  -- Keep slot registries that were added by another save operation instead
-  -- of letting an older in-memory options table erase them.
-  local function mergeSaveSlots(diskSlots, memorySlots)
-    local out = {}
-
-    local function add(source)
-      if type(source) ~= "table" then return end
-
-      for version, registry in pairs(source) do
-        if type(version) == "string" and type(registry) == "table"
-            and isGen3(version) then
-          local dst = out[version] or {
-            list = {},
-            active = nil,
-            names = {},
-          }
-
-          local seen = {}
-          for _, id in ipairs(dst.list) do
-            seen[id] = true
-          end
-
-          for _, id in ipairs(registry.list or {}) do
-            if type(id) == "string" and not seen[id] then
-              dst.list[#dst.list + 1] = id
-              seen[id] = true
-            end
-          end
-
-          if type(registry.names) == "table" then
-            for id, name in pairs(registry.names) do
-              dst.names[id] = name
-            end
-          end
-
-          if registry.active and seen[registry.active] then
-            dst.active = registry.active
-          elseif not dst.active and registry.active then
-            dst.active = registry.active
-          end
-
-          out[version] = dst
-        end
-      end
-    end
-
-    add(diskSlots)
-    add(memorySlots)
-
-    for _, registry in pairs(out) do
-      table.sort(registry.list, function(a, b)
-        local na = tonumber(tostring(a):match("^slot(%d+)$")) or 0
-        local nb = tonumber(tostring(b):match("^slot(%d+)$")) or 0
-        return na < nb
-      end)
-
-      if registry.names and next(registry.names) == nil then
-        registry.names = nil
-      end
-
-      if registry.active then
-        local valid = false
-        for _, id in ipairs(registry.list) do
-          if id == registry.active then
-            valid = true
-            break
-          end
-        end
-        if not valid then
-          registry.active = registry.list[1]
-        end
-      elseif registry.list[1] then
-        registry.active = registry.list[1]
-      end
-    end
-
-    return out
-  end
-
-  -- SaveData already owns the actual Gen 3 slot files. This wrapper only
-  -- protects the shared options registry from stale in-memory writes.
-  if not SaveData._gen3MultiSlotOptionsWrapped then
-    local stockSaveOptions = SaveData.saveOptions
-
-    function SaveData.saveOptions(options, fs)
-      if SaveData._gen3MultiSlotAuthoritative then
-        local result = stockSaveOptions(options, fs)
-        if result and Game and Game.save and Game.save.options
-            and result.saveSlots then
-          Game.save.options.saveSlots = result.saveSlots
-        end
-        return result
-      end
-
-      options = options or {}
-      local disk = SaveData.loadOptions(fs)
-
-      if disk and disk.saveSlots then
-        options.saveSlots = mergeSaveSlots(
-          disk.saveSlots,
-          options.saveSlots
-        )
-      end
-
-      local result = stockSaveOptions(options, fs)
-
-      if result and Game and Game.save and Game.save.options
-          and result.saveSlots then
-        Game.save.options.saveSlots = result.saveSlots
-      end
-
-      return result
-    end
-
-    SaveData._gen3MultiSlotOptionsWrapped = true
-  end
-
-  if not SaveData._gen3MultiSlotDeleteWrapped then
-    local stockDelete = SaveData.deleteSlot
-
-    function SaveData.deleteSlot(version, slotId)
-      if not isGen3(version or GameVersion.get()) then
-        return stockDelete(version, slotId)
-      end
-
-      SaveData._gen3MultiSlotAuthoritative = true
-      local ok, err = stockDelete(version, slotId)
-      SaveData._gen3MultiSlotAuthoritative = false
-      syncOptions()
-
-      return ok, err
-    end
-
-    SaveData._gen3MultiSlotDeleteWrapped = true
-  end
-
-  if not SaveData._gen3MultiSlotCreateWrapped then
-    local stockCreate = SaveData.createSlot
-
-    function SaveData.createSlot(version)
-      if not isGen3(version or GameVersion.get()) then
-        return stockCreate(version)
-      end
-
-      SaveData._gen3MultiSlotAuthoritative = true
-      local id = stockCreate(version)
-      SaveData._gen3MultiSlotAuthoritative = false
-      syncOptions()
-
-      return id
-    end
-
-    SaveData._gen3MultiSlotCreateWrapped = true
-  end
-
-  local function slotRows(version, allowNew, allowManage)
+  local function slots(version)
     if not isGen3(version) then return {} end
+    return SaveData.listSlots(version) or {}
+  end
 
-    local rows = {}
-    local active = SaveData.activeSlot(version)
-
-    for _, slot in ipairs(SaveData.listSlots(version) or {}) do
-      if slot.exists then
-        local mark = slot.id == active and "*" or " "
-        local name = slot.name or "SAVE"
-
-        rows[#rows + 1] = {
-          label = Strings("%s%s %s", mark, slot.id, name),
-          value = slot.id,
-          exists = true,
-        }
-      end
+  local function slotLabel(slot)
+    local label = slot.name
+    if type(label) ~= "string" or label == "" then
+      label = slot.id
     end
+    return label
+  end
 
-    if allowNew then
+  local function makeRows(version, includeNew)
+    local rows = {}
+
+    for _, slot in ipairs(slots(version)) do
       rows[#rows + 1] = {
-        label = Strings("NEW SAVE"),
-        value = "__new__",
+        id = slot.id,
+        label = slot.id .. "  " .. slotLabel(slot),
+        exists = slot.exists == true,
+        active = slot.id == SaveData.activeSlot(version),
       }
     end
 
-    if allowManage then
+    if includeNew then
       rows[#rows + 1] = {
-        label = Strings("MANAGE"),
-        value = "__manage__",
+        id = "__new__",
+        label = "NEW SAVE SLOT",
       }
     end
 
     return rows
   end
 
-  local function confirmDelete(game, slotId, callback)
-    local prompts = {
-      Strings("Delete %s?", slotId),
-      Strings("Are you sure?"),
-      Strings("Last chance!\nDelete forever?"),
-    }
+  local function pushList(game, title, rows, onSelect)
+    local Stack = require("src.ui.game3.stack")
+    local Window = require("src.ui.game3.window")
+    local ListMenu = require("src.ui.game3.list_menu")
+    local FrlgFont = require("src.ui.game3.frlg_font")
 
-    local function ask(index)
-      game.stack:push(TextBox.new(game, prompts[index], function()
-        game.stack:push(ChoiceBox.new(game, function(yes)
-          if not yes then return end
-          if index >= #prompts then
-            callback()
-          else
-            ask(index + 1)
-          end
-        end))
-      end))
+    local menu = ListMenu.new({
+      template = Window.template(4, 4, 22, math.min(14, (#rows * 2) + 2)),
+      items = rows,
+      maxShowed = math.min(6, math.max(1, #rows)),
+      itemX = 8,
+      cursorX = 0,
+      rowHeight = 16,
+      onSelect = function(item)
+        if onSelect then onSelect(item) end
+      end,
+      onCancel = function()
+        Stack.pop("gen3_multi_save_slots")
+      end,
+    })
+
+    local oldDraw = menu.draw
+    menu.draw = function(self)
+      oldDraw(self)
+      local tpl = self.template
+      local titleX = (tpl.left or 4) * 8 + 8
+      local titleY = (tpl.top or 4) * 8 - 12
+      FrlgFont.draw(title, titleX, titleY, {
+        colors = FrlgFont.COLOR.NORMAL,
+      })
     end
 
-    ask(1)
+    Stack.push("gen3_multi_save_slots", menu, { hideBelow = true })
   end
 
-  local function openManageSlots(game, version, refresh)
-    local function buildRows()
-      local rows = {}
-      local active = SaveData.activeSlot(version)
+  local function openSelectSlot(game, session)
+    local version = versionFor(game, session)
+    local rows = makeRows(version, true)
 
-      for _, slot in ipairs(SaveData.listSlots(version) or {}) do
-        if slot.exists then
-          if slot.id == active then
-            rows[#rows + 1] = {
-              label = Strings("%s *ACTIVE", slot.id),
-              value = slot.id,
-              locked = true,
-            }
-          else
-            rows[#rows + 1] = {
-              label = Strings("DEL %s", slot.id),
-              value = slot.id,
-              locked = false,
-            }
-          end
+    if #rows == 0 then
+      mod.log:warn("No Gen 3 save slots available for %s", tostring(version))
+      return
+    end
+
+    pushList(game, "SELECT SAVE SLOT", rows, function(item)
+      local Stack = require("src.ui.game3.stack")
+
+      if item.id == "__new__" then
+        local id = SaveData.createSlot(version)
+        if not id then
+          mod.log:warn("Could not create a Gen 3 save slot")
+          Stack.pop("gen3_multi_save_slots")
+          return
         end
+        SaveData.setActiveSlot(version, id)
+      else
+        SaveData.setActiveSlot(version, item.id)
       end
 
-      return rows
+      Stack.pop("gen3_multi_save_slots")
+    end)
+  end
+
+  local function openManageSlots(game, session)
+    local version = versionFor(game, session)
+    local rows = {}
+
+    for _, slot in ipairs(slots(version)) do
+      rows[#rows + 1] = {
+        id = slot.id,
+        label = slot.id .. (slot.id == SaveData.activeSlot(version) and "  ACTIVE" or ""),
+        locked = slot.id == SaveData.activeSlot(version),
+      }
     end
 
-    local rows = buildRows()
-
     if #rows == 0 then
-      game.stack:push(TextBox.new(game, Strings("No slots.")))
+      mod.log:warn("No Gen 3 save slots to manage")
       return
     end
 
-    local menu
-    menu = ListMenu.new(game, Strings("DELETE SLOT"), rows, {
-      onChoose = function(item)
-        if item.locked then
-          game.stack:push(TextBox.new(
-            game,
-            Strings("Can't delete the active slot.\fSwitch first.")
-          ))
-          return
-        end
+    pushList(game, "MANAGE SAVE SLOTS", rows, function(item)
+      if item.locked then
+        return
+      end
 
-        confirmDelete(game, item.value, function()
-          local ok, err = SaveData.deleteSlot(version, item.value)
+      local Stack = require("src.ui.game3.stack")
+      local Message = require("src.ui.game3.message")
 
-          if ok then
-            menu.items = buildRows()
-            menu.index = math.max(
-              1,
-              math.min(menu.index or 1, #menu.items)
-            )
-            menu.scroll = 0
-
-            if refresh then refresh() end
-
-            game.stack:push(TextBox.new(game, Strings("Deleted.")))
-          else
-            game.stack:push(TextBox.new(
-              game,
-              Strings("Couldn't delete.\n%s", tostring(err or ""))
-            ))
-          end
-        end)
-      end,
-    })
-
-    game.stack:push(menu)
+      -- Use the native Gen 3 message/choice infrastructure for confirmation.
+      -- The slot is not deleted until the player confirms.
+      if Message and Message.show then
+        Message.show(
+          "DELETE " .. item.id .. "?",
+          function()
+            SaveData.deleteSlot(version, item.id)
+            Stack.pop("gen3_multi_save_slots")
+          end,
+          function() end
+        )
+      else
+        SaveData.deleteSlot(version, item.id)
+        Stack.pop("gen3_multi_save_slots")
+      end
+    end)
   end
 
-  local function openSlotPicker(game, options)
-    local version = currentVersion(game)
-    if not isGen3(version) then return end
+  -- FireRed's native Start menu calls this hook before displaying its entries.
+  -- Do not replace the native SAVE entry: its SaveMenu performs the actual
+  -- FireRed save flow, including the save confirmation and write.
+  if not mod._gen3SaveSlotsStartMenuHook then
+    mod.hooks:wrap("ui.start_menu.items", function(next, game, items)
+      items = next(game, items) or items
 
-    local rows = slotRows(
-      version,
-      options.allowNew,
-      options.allowManage
-    )
+      local session = game and game.session
+      local version = versionFor(game, session)
+      if not isGen3(version) then
+        return items
+      end
 
-    if #rows == 0 then
-      game.stack:push(TextBox.new(game, Strings("No save slots.")))
-      return
-    end
-
-    local menu
-
-    local function rebuild()
-      menu.items = slotRows(
-        version,
-        options.allowNew,
-        options.allowManage
-      )
-      menu.index = math.max(
-        1,
-        math.min(menu.index or 1, #menu.items)
-      )
-      menu.scroll = 0
-    end
-
-    menu = ListMenu.new(game, options.title or Strings("SLOTS"), rows, {
-      onChoose = function(item)
-        if item.value == "__manage__" then
-          openManageSlots(game, version, rebuild)
-          return
-        end
-
-        if item.value == "__new__" then
-          local id = SaveData.createSlot(version)
-
-          if not id then
-            game.stack:push(TextBox.new(
-              game,
-              Strings("Can't create.")
-            ))
-            return
-          end
-
-          SaveData.setActiveSlot(version, id)
-          syncOptions()
-
-          if menu.close then menu:close() end
-          if options.onPick then
-            options.onPick(id, true)
-          end
-          return
-        end
-
-        SaveData.setActiveSlot(version, item.value)
-        syncOptions()
-
-        if menu.close then menu:close() end
-        if options.onPick then
-          options.onPick(item.value, false)
-        end
-      end,
-    })
-
-    game.stack:push(menu)
-  end
-
-  -- Replace the Gen 3 title-screen CONTINUE action with a slot picker.
-  if not TitleState._gen3MultiSlotWrapped then
-    local originalOpenMenu = TitleState.openMenu
-
-    function TitleState:openMenu()
-      originalOpenMenu(self)
-
-      if not isGen3(currentVersion(self.game)) then return end
-
-      local top = self.game.stack and self.game.stack:top()
-      if not (top and top.items) then return end
-
-      for _, item in ipairs(top.items) do
-        if tostring(item.label or ""):find("CONTINUE", 1, true) then
-          local originalSelect = item.onSelect
-
-          item.onSelect = function()
-            openSlotPicker(self.game, {
-              title = Strings("LOAD SLOT"),
-              allowNew = false,
-              allowManage = true,
-              onPick = function()
-                if originalSelect then
-                  originalSelect()
-                end
-              end,
-            })
-          end
-
+      local saveIndex
+      for i, item in ipairs(items) do
+        if item.id == "save" then
+          saveIndex = i
           break
         end
       end
-    end
 
-    TitleState._gen3MultiSlotWrapped = true
+      if not saveIndex then
+        return items
+      end
+
+      table.insert(items, saveIndex, {
+        id = "save_slot",
+        label = "SAVE SLOT",
+        onSelect = function(g, s)
+          openSelectSlot(g, s)
+        end,
+      })
+
+      table.insert(items, saveIndex + 1, {
+        id = "manage_save_slots",
+        label = "MANAGE SAVES",
+        onSelect = function(g, s)
+          openManageSlots(g, s)
+        end,
+      })
+
+      return items
+    end)
+
+    mod._gen3SaveSlotsStartMenuHook = true
   end
 
-  -- Replace the in-game SAVE action with a slot picker.
-  mod.hooks:wrap("ui.start_menu.items", function(next, game, items)
-    items = next(game, items) or items
+  -- The active slot must be resolved before any ordinary Gen 3 save/load.
+  mod.events:on("game.ready", function(payload)
+    local game = payload and payload.game or payload
+    local session = game and game.session
+    local version = versionFor(game, session)
 
-    if not isGen3(currentVersion(game)) then
-      return items
-    end
-
-    for _, item in ipairs(items) do
-      local label = tostring(item.label or "")
-
-      if label == "SAVE"
-          or (label:find("SAVE", 1, true)
-              and not label:find("SLOT", 1, true)) then
-        local originalSelect = item.onSelect
-
-        item.onSelect = function()
-          openSlotPicker(game, {
-            title = Strings("SAVE TO"),
-            allowNew = true,
-            allowManage = true,
-            onPick = function()
-              if originalSelect then
-                originalSelect()
-              end
-            end,
-          })
-        end
-
-        break
-      end
-    end
-
-    return items
-  end)
-
-  mod.events:on("game.ready", function()
-    local version = currentVersion(Game)
     if not isGen3(version) then return end
+
     pcall(SaveData.refreshSlotResolution, version)
-    pcall(syncOptions)
+    pcall(SaveData.activeSlot, version)
   end)
 
-  mod.exports.version = "1.0.0"
-  mod.log:info("GEN3_MULTI_SAVE_SLOTS 1.0.0")
+  mod.exports.version = "1.1.0"
+  mod.log:info("GEN3_MULTI_SAVE_SLOTS 1.1.0")
 end
