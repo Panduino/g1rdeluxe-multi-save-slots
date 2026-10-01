@@ -321,7 +321,6 @@ return function(mod)
         if slotId and slotId ~= "__none__" then
           SaveData.setActiveSlot(version, slotId)
           Stack.pop(id)
-          local game = game
           if game and type(game._handleBootAction) == "function" then
             game:_handleBootAction({ action = "continue" })
           end
